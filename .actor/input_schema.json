@@ -1,1 +1,30 @@
+{
+  "title": "Review Sentiment Analyzer Input",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "reviewsText": {
+      "title": "Recensioni (una per riga)",
+      "type": "string",
+      "description": "Incolla qui le recensioni da analizzare, una per riga.",
+      "editor": "textarea"
+    },
+    "maxReviews": {
+      "title": "Numero massimo di recensioni da analizzare",
+      "type": "integer",
+      "description": "Limite di sicurezza per non superare i costi previsti in un singolo run.",
+      "default": 100,
+      "minimum": 1,
+      "maximum": 500
+    },
+    "anthropicApiKey": {
+      "title": "Chiave API Anthropic",
+      "type": "string",
+      "description": "La tua chiave API di Anthropic (console.anthropic.com), usata per l'analisi AI. Non viene mai salvata dall'Actor.",
+      "editor": "textfield",
+      "isSecret": true
+    }
+  },
+  "required": ["reviewsText", "anthropicApiKey"]
+}
 
