@@ -1,5 +1,5 @@
 """
-Review Sentiment & Summary Analyzer — Apify Actor
+Review Sentiment & Summary Analyzer — Apify Actor (versione Gemini)
 """
 
 import asyncio
@@ -9,8 +9,7 @@ import re
 import requests
 from apify import Actor
 
-ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 
 
 def parse_reviews(reviews_text: str, max_reviews: int) -> list[str]:
@@ -33,5 +32,99 @@ Rispondi SOLO con un oggetto JSON valido in questo formato esatto, senza testo a
     {{"index": 1, "sentiment": "positivo", "themes": ["tema1", "tema2"]}},
     ...
   ],
-  "overall_summary": "riassunto in 2-3 fr
+  "overall_summary": "riassunto in 2-3 frasi",
+  "top_themes": ["tema1", "tema2", "tema3", "tema4", "tema5"]
+}}
 
+Il campo "sentiment" deve essere sempre uno tra: "positivo", "negativo", "neutro".
+
+Recensioni:
+{numbered_reviews}"""
+
+
+def call_gemini(prompt: str, api_key: str) -> dict:
+    response = requests.post(
+        f"{GEMINI_API_URL}?key={api_key}",
+        headers={"content-type": "application/json"},
+        json={"contents": [{"parts": [{"text": prompt}]}]},
+        timeout=90,
+    )
+    response.raise_for_status()
+    data = response.json()
+
+    raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
+
+    cleaned = re.sub(r"^```(?:json)?|```$", "", raw_text.strip(), flags=re.MULTILINE).strip()
+
+    return json.loads(cleaned)
+
+
+async def main() -> None:
+    async with Actor:
+        actor_input = await Actor.get_input() or {}
+        reviews_text = actor_input.get("reviewsText", "")
+        max_reviews = int(actor_input.get("maxReviews", 100))
+        api_key = actor_input.get("geminiApiKey", "").strip()
+
+        if not api_key:
+            Actor.log.error("Chiave API Gemini mancante.")
+            await Actor.fail(status_message="Manca la chiave API Gemini nell'input.")
+            return
+
+        reviews = parse_reviews(reviews_text, max_reviews)
+        if not reviews:
+            Actor.log.error("Nessuna recensione valida trovata nell'input.")
+            await Actor.fail(status_message="Il campo recensioni è vuoto o non contiene testo valido.")
+            return
+
+        Actor.log.info(f"Analisi di {len(reviews)} recensioni in corso...")
+
+        prompt = build_prompt(reviews)
+
+        try:
+            result = call_gemini(prompt, api_key)
+        except requests.exceptions.HTTPError as e:
+            Actor.log.error(f"Errore dall'API Gemini: {e}")
+            await Actor.fail(status_message="La chiave API Gemini non è valida o ha esaurito la quota gratuita.")
+            return
+        except json.JSONDecodeError as e:
+            Actor.log.error(f"Risposta AI non in formato JSON valido: {e}")
+            await Actor.fail(status_message="Il modello AI ha restituito una risposta malformata. Riprova.")
+            return
+        except Exception as e:
+            Actor.log.error(f"Errore imprevisto durante la chiamata AI: {e}")
+            await Actor.fail(status_message="Errore imprevisto durante l'analisi AI.")
+            return
+
+        analyzed_reviews = result.get("reviews", [])
+        if not analyzed_reviews:
+            Actor.log.warning("Il modello non ha restituito recensioni analizzate.")
+            await Actor.push_data({
+                "note": "Nessuna recensione analizzata restituita dal modello.",
+                "raw_result": result,
+            })
+            return
+
+        for item in analyzed_reviews:
+            index = item.get("index")
+            original_text = reviews[index - 1] if index and 0 < index <= len(reviews) else None
+
+            await Actor.push_data({
+                "reviewText": original_text,
+                "sentiment": item.get("sentiment"),
+                "themes": item.get("themes", []),
+            })
+            await Actor.charge(event_name="review_analyzed", count=1)
+
+        await Actor.push_data({
+            "type": "summary",
+            "totalReviewsAnalyzed": len(analyzed_reviews),
+            "overallSummary": result.get("overall_summary"),
+            "topThemes": result.get("top_themes", []),
+        })
+
+        Actor.log.info(f"Analisi completata: {len(analyzed_reviews)} recensioni elaborate.")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
