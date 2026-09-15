@@ -1,29 +1,19 @@
 {
-  "title": "Review Sentiment Analyzer Input",
+  "title": "Website Contact Finder - Input",
   "type": "object",
   "schemaVersion": 1,
   "properties": {
-    "reviewsText": {
-      "title": "Recensioni (una per riga)",
-      "type": "string",
-      "description": "Incolla qui le recensioni da analizzare, una per riga.",
-      "editor": "textarea"
-    },
-    "maxReviews": {
-      "title": "Numero massimo di recensioni da analizzare",
-      "type": "integer",
-      "description": "Limite di sicurezza per non superare i costi previsti in un singolo run.",
-      "default": 100,
-      "minimum": 1,
-      "maximum": 500
-    },
-    "geminiApiKey": {
-      "title": "Chiave API Gemini",
-      "type": "string",
-      "description": "La tua chiave API gratuita di Google AI Studio (aistudio.google.com), usata per l'analisi AI. Non viene mai salvata dall'Actor.",
-      "editor": "textfield",
-      "isSecret": true
+    "websites": {
+      "title": "Lista di siti web",
+      "type": "array",
+      "description": "URL dei siti da cui estrarre contatti (es. https://example.it)",
+      "editor": "json",
+      "default": [
+        "https://example.it",
+        "https://test.com"
+      ]
     }
   },
-  "required": ["reviewsText", "geminiApiKey"]
+  "required": ["websites"]
 }
+
