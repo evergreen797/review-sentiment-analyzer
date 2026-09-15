@@ -1,130 +1,104 @@
-"""
-Review Sentiment & Summary Analyzer — Apify Actor (versione Gemini)
-"""
-
 import asyncio
-import json
 import re
-
-import requests
+from urllib.parse import urlparse
+import httpx
+from bs4 import BeautifulSoup
 from apify import Actor
 
-GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
-
-
-def parse_reviews(reviews_text: str, max_reviews: int) -> list[str]:
-    lines = [line.strip() for line in reviews_text.splitlines()]
-    reviews = [line for line in lines if line]
-    return reviews[:max_reviews]
-
-
-def build_prompt(reviews: list[str]) -> str:
-    numbered_reviews = "\n".join(f"{i + 1}. {r}" for i, r in enumerate(reviews))
-
-    return f"""Analizza queste {len(reviews)} recensioni di clienti. Per ognuna, determina il sentiment e fino a 3 temi ricorrenti brevi (es. "tempi di consegna", "qualità prodotto").
-
-Poi genera un riassunto complessivo in 2-3 frasi e i 5 temi più ricorrenti in totale.
-
-Rispondi SOLO con un oggetto JSON valido in questo formato esatto, senza testo aggiuntivo prima o dopo:
-
-{{
-  "reviews": [
-    {{"index": 1, "sentiment": "positivo", "themes": ["tema1", "tema2"]}},
-    ...
-  ],
-  "overall_summary": "riassunto in 2-3 frasi",
-  "top_themes": ["tema1", "tema2", "tema3", "tema4", "tema5"]
-}}
-
-Il campo "sentiment" deve essere sempre uno tra: "positivo", "negativo", "neutro".
-
-Recensioni:
-{numbered_reviews}"""
-
-
-def call_gemini(prompt: str, api_key: str) -> dict:
-    response = requests.post(
-        f"{GEMINI_API_URL}?key={api_key}",
-        headers={"content-type": "application/json"},
-        json={"contents": [{"parts": [{"text": prompt}]}]},
-        timeout=90,
-    )
-    response.raise_for_status()
-    data = response.json()
-
-    raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
-
-    cleaned = re.sub(r"^```(?:json)?|```$", "", raw_text.strip(), flags=re.MULTILINE).strip()
-
-    return json.loads(cleaned)
-
-
-async def main() -> None:
+async def main():
     async with Actor:
-        actor_input = await Actor.get_input() or {}
-        reviews_text = actor_input.get("reviewsText", "")
-        max_reviews = int(actor_input.get("maxReviews", 100))
-        api_key = actor_input.get("geminiApiKey", "").strip()
-
-        if not api_key:
-            Actor.log.error("Chiave API Gemini mancante.")
-            await Actor.fail(status_message="Manca la chiave API Gemini nell'input.")
-            return
-
-        reviews = parse_reviews(reviews_text, max_reviews)
-        if not reviews:
-            Actor.log.error("Nessuna recensione valida trovata nell'input.")
-            await Actor.fail(status_message="Il campo recensioni è vuoto o non contiene testo valido.")
-            return
-
-        Actor.log.info(f"Analisi di {len(reviews)} recensioni in corso...")
-
-        prompt = build_prompt(reviews)
-
-        try:
-            result = call_gemini(prompt, api_key)
-        except requests.exceptions.HTTPError as e:
-            Actor.log.error(f"Errore dall'API Gemini: {e}")
-            await Actor.fail(status_message="La chiave API Gemini non è valida o ha esaurito la quota gratuita.")
-            return
-        except json.JSONDecodeError as e:
-            Actor.log.error(f"Risposta AI non in formato JSON valido: {e}")
-            await Actor.fail(status_message="Il modello AI ha restituito una risposta malformata. Riprova.")
-            return
-        except Exception as e:
-            Actor.log.error(f"Errore imprevisto durante la chiamata AI: {e}")
-            await Actor.fail(status_message="Errore imprevisto durante l'analisi AI.")
-            return
-
-        analyzed_reviews = result.get("reviews", [])
-        if not analyzed_reviews:
-            Actor.log.warning("Il modello non ha restituito recensioni analizzate.")
-            await Actor.push_data({
-                "note": "Nessuna recensione analizzata restituita dal modello.",
-                "raw_result": result,
-            })
-            return
-
-        for item in analyzed_reviews:
-            index = item.get("index")
-            original_text = reviews[index - 1] if index and 0 < index <= len(reviews) else None
-
-            await Actor.push_data({
-                "reviewText": original_text,
-                "sentiment": item.get("sentiment"),
-                "themes": item.get("themes", []),
-            })
-            await Actor.charge(event_name="review_analyzed", count=1)
-
-        await Actor.push_data({
-            "type": "summary",
-            "totalReviewsAnalyzed": len(analyzed_reviews),
-            "overallSummary": result.get("overall_summary"),
-            "topThemes": result.get("top_themes", []),
-        })
-
-        Actor.log.info(f"Analisi completata: {len(analyzed_reviews)} recensioni elaborate.")
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+        # Leggi input
+        input_data = await Actor.get_input()
+        websites = input_data.get('websites', [])
+        
+        results = []
+        
+        for url in websites:
+            try:
+                # Scarica la pagina
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(
+                        url,
+                        headers={
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                        },
+                        timeout=30.0
+                    )
+                
+                if response.status_code != 200:
+                    Actor.log.warning(f'Skip {url} - Status: {response.status_code}')
+                    continue
+                
+                html = response.text
+                soup = BeautifulSoup(html, 'html.parser')
+                
+                # Estrai email con regex
+                emails = []
+                email_pattern = r'[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+                matches = re.findall(email_pattern, html)
+                
+                if matches:
+                    # Filtra email poco utili
+                    filtered = [
+                        e for e in matches 
+                        if not any(x in e for x in ['.png', '.jpg', 'cdn', '.css'])
+                    ]
+                    emails = list(set(filtered))  # Rimuovi duplicate
+                
+                # Estrai telefono (pattern italiani + internazionali)
+                phones = []
+                phone_pattern = r'(?:\+?\d{1,3}[-.\s]?)?(?:\\(?\\d{2,4}\\)?[-.\s]?)?\d{3,4}[-.\s]?\d{3,4}'
+                phone_matches = re.findall(phone_pattern, html)
+                if phone_matches:
+                    phones = list(set(phone_matches[:5]))  # Max 5 numeri, rimuovi duplicate
+                
+                # Estrai link social
+                socials = {
+                    'linkedin': [],
+                    'instagram': [],
+                    'facebook': []
+                }
+                
+                for link in soup.find_all('a', href=True):
+                    href = link['href']
+                    if 'linkedin.com' in href:
+                        socials['linkedin'].append(href)
+                    elif 'instagram.com' in href:
+                        socials['instagram'].append(href)
+                    elif 'facebook.com' in href:
+                        socials['facebook'].append(href)
+                
+                # Estrai indirizzo (tag <address>)
+                address = ''
+                address_tag = soup.find('address')
+                if address_tag:
+                    address = address_tag.get_text(strip=True).replace('\n', ' ').replace('\r', ' ')[:200]
+                
+                # Charging (Pay-per-Event) - solo se trova email
+                if emails:
+                    await Actor.charge(
+                        event_name='website_scraped',
+                        count=1,
+                        total_amount_usd=0.12  # 12 centesimi per sito
+                    )
+                
+                results.append({
+                    'url': url,
+                    'emails': emails,
+                    'phones': phones,
+                    'socials': socials,
+                    'address': address,
+                    'scrapedAt': Actor.get_current_datetime().isoformat()
+                })
+                
+                Actor.log.info(f'✅ {url} - Emails: {len(emails)}')
+                
+                # Delay per evitare blocchi (1-3 secondi)
+                await asyncio.sleep(1 + (hash(url) % 3))
+                
+            except Exception as e:
+                Actor.log.error(f'❌ Error scraping {url}: {str(e)}')
+                continue
+        
+        # Salva output
+        await Actor.push_data(results)
