@@ -17,14 +17,14 @@
       "minimum": 1,
       "maximum": 500
     },
-    "anthropicApiKey": {
-      "title": "Chiave API Anthropic",
+    "geminiApiKey": {
+      "title": "Chiave API Gemini",
       "type": "string",
-      "description": "La tua chiave API di Anthropic (console.anthropic.com), usata per l'analisi AI. Non viene mai salvata dall'Actor.",
+      "description": "La tua chiave API gratuita di Google AI Studio (aistudio.google.com), usata per l'analisi AI. Non viene mai salvata dall'Actor.",
       "editor": "textfield",
       "isSecret": true
     }
   },
-  "required": ["reviewsText", "anthropicApiKey"]
+  "required": ["reviewsText", "geminiApiKey"]
 }
 
