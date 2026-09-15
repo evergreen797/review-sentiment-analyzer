@@ -27,4 +27,3 @@
   },
   "required": ["reviewsText", "geminiApiKey"]
 }
-
